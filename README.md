@@ -55,6 +55,10 @@ Three checks, in order of what they prove. A 200 on the third one means the
 whole chain works: LDAP, JWT, layer1 permissions, the SysML v2 API, TDB2 and
 the OpenSysML parser.
 
+There is no browser UI in this stack. "Logging in" means exchanging LDAP
+credentials for a JWT at the auth service and sending it as a bearer token; the
+model itself is read and written over the SysML v2 REST API on port 8083.
+
 **1. Log in against LDAP.** The seed graph ships two demo users, `user01`
 (password `password1`) and `user02` (`password2`):
 
