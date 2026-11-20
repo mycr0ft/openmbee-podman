@@ -1,0 +1,199 @@
+# OpenMBEE Flexo MMS + Flexo SysML v2 API on Podman (podman-compose).
+#
+# Ported from upstream Docker assets:
+#   Open-MBEE/flexo-mms-deployment  docker-compose/docker-compose.yml
+#   Open-MBEE/flexo-mms-sysmlv2     docker-compose/docker-compose.yml
+# plus the optional OpenSysML `sysml-grpc` backend, which is what gives the
+# SysML v2 API textual-notation input/output and commit validation.
+#
+# Topology (podman network "openmbee"):
+#
+#   openldap-server :1389 <-- auth-service :8082 --+
+#   quad-store-server :3030 (TDB2) <-- layer1-service :8080 <-- sysmlv2-service :8083 <-- opensysml :50051 (gRPC)
+#   minio-server :9000 <-- store-service :8081 -----^
+#
+# Podman deltas from upstream (each one is a real porting issue, see README):
+#   1. every image ref is fully qualified (docker.io/...): this host has no
+#      unqualified-search registries, so "atomgraph/fuseki" fails to resolve.
+#   2. no `container_name:`: named containers make `podman-compose up` fail
+#      after `down` (name already in use), and podman-compose owns naming.
+#   3. services on a fixed, explicitly named network with explicit aliases, so
+#      DNS works for both service name and upstream hostname.
+#   4. named volumes are mounted with `:U` so rootless podman chowns them to
+#      the in-container uid (fuseki runs as uid 1000, minio as 1000).
+#   5. quad store runs TDB2 (`--loc`) on a volume instead of upstream's
+#      in-memory `--file`, so models survive down/up; the TriG ACL seed is
+#      loaded once by bin/bootstrap.sh (which also makes it idempotent).
+#   6. no `version:` key and no `depends_on:` at all. podman-compose 1.3 has no
+#      `condition: service_healthy` and resolves `depends_on` by looking up the
+#      dependency's container during creation, which fails outright when that
+#      container does not exist yet. Startup order is therefore enforced by
+#      bin/bootstrap.sh + bin/wait-for.sh, which wait on real endpoints.
+#   7. secrets live in .env and are injected via `environment:` (env_file
+#      values are not interpolated, and the same JWT secret must reach three
+#      services).
+
+services:
+  openldap-server:
+    image: docker.io/bitnamilegacy/openldap:2.6.4
+    hostname: openldap-server
+    networks:
+      openmbee:
+        aliases: [openldap-server]
+    environment:
+      LDAP_PORT_NUMBER: "1389"
+      LDAP_ROOT: "dc=example,dc=org"
+      LDAP_ADMIN_USERNAME: "admin"
+      LDAP_ADMIN_PASSWORD: "${LDAP_ADMIN_PASSWORD}"
+      LDAP_USERS: "${LDAP_USERS}"
+      LDAP_PASSWORDS: "${LDAP_PASSWORDS}"
+      LDAP_USER_DC: "users"
+      LDAP_GROUP: "mms"
+    ports:
+      - "${BIND_ADDR}:${LDAP_PORT:-1389}:1389"
+    volumes:
+      - openldap-data:/bitnami/openldap:U
+    restart: unless-stopped
+
+  quad-store-server:
+    image: docker.io/atomgraph/fuseki:4.6
+    hostname: quad-server
+    networks:
+      openmbee:
+        aliases: [quad-server]
+    env_file:
+      - ./env/flexo-mms-quad-store.env
+    # Upstream: --file=/tmp/mount/cluster.trig --update /ds  (in-memory: data
+    # is wiped on every container start). TDB2 below is persistent.
+    command: ["--loc=/fuseki/databases", "--update", "/ds"]
+    volumes:
+      - fuseki-data:/fuseki/databases:U
+      - ./mount:/tmp/mount:ro,Z
+    ports:
+      - "${BIND_ADDR}:${QUAD_PORT:-3030}:3030"
+    healthcheck:
+      # $/ping only exists on Fuseki's admin port; with a dataset mounted the
+      # service answers on /ds. An empty ASK is the cheapest 200 that proves
+      # both the HTTP server and the TDB2 dataset are live.
+      test: ["CMD-SHELL", "wget -q -O /dev/null 'http://127.0.0.1:3030/ds/sparql?query=ASK%7B%7D'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # Object store for artifacts and (optionally) commits. Upstream uses
+  # quay.io/minio/minio:latest; MinIO withdrew its free community images in
+  # 2025, so this uses the Bitnami legacy build of the same server (same uid
+  # 1001 conventions as the LDAP image, data dir /bitnami/minio/data).
+  minio-server:
+    image: docker.io/bitnamilegacy/minio:2025.7.23-debian-12-r5
+    hostname: minio-server
+    networks:
+      openmbee:
+        aliases: [minio-server]
+    environment:
+      MINIO_ROOT_USER: "${S3_ACCESS_KEY}"
+      MINIO_ROOT_PASSWORD: "${S3_SECRET_KEY}"
+    volumes:
+      - minio-data:/bitnami/minio/data:U
+    ports:
+      - "${BIND_ADDR}:${MINIO_PORT:-9000}:9000"
+    restart: unless-stopped
+
+  auth-service:
+    image: docker.io/openmbee/flexo-mms-auth-service:v0.1.1
+    hostname: auth-service
+    networks:
+      openmbee:
+        aliases: [auth-service]
+    env_file:
+      - ./env/flexo-mms-auth.env
+    environment:
+      JWT_DOMAIN: "${JWT_DOMAIN}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE}"
+      JWT_REALM: "${JWT_REALM}"
+      JWT_SECRET: "${JWT_SECRET}"
+    ports:
+      - "${BIND_ADDR}:${AUTH_PORT:-8082}:8080"
+    restart: unless-stopped
+
+  store-service:
+    image: docker.io/openmbee/flexo-mms-store-service:v0.2.0
+    hostname: store-service
+    networks:
+      openmbee:
+        aliases: [store-service]
+    env_file:
+      - ./env/flexo-mms-store.env
+    environment:
+      JWT_SECRET: "${JWT_SECRET}"
+      AWS_ACCESS_KEY_ID: "${S3_ACCESS_KEY}"
+      AWS_SECRET_ACCESS_KEY: "${S3_SECRET_KEY}"
+    ports:
+      - "${BIND_ADDR}:${STORE_PORT:-8081}:8080"
+    restart: unless-stopped
+
+  layer1-service:
+    image: docker.io/openmbee/flexo-mms-layer1-service:v0.3.1
+    hostname: layer1-service
+    networks:
+      openmbee:
+        aliases: [layer1-service]
+    env_file:
+      - ./env/flexo-mms-layer1.env
+    environment:
+      JWT_DOMAIN: "${JWT_DOMAIN}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE}"
+      JWT_REALM: "${JWT_REALM}"
+      JWT_SECRET: "${JWT_SECRET}"
+    ports:
+      - "${BIND_ADDR}:${LAYER1_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  # SysML v2 / Systems Modeling API (platform-specific model over Flexo MMS).
+  sysmlv2-service:
+    image: docker.io/openmbee/flexo-sysmlv2:develop-SNAPSHOT
+    hostname: flexo-sysmlv2
+    networks:
+      openmbee:
+        aliases: [flexo-sysmlv2, sysmlv2-service]
+    env_file:
+      - ./env/flexo-sysmlv2.env
+    environment:
+      JWT_DOMAIN: "${JWT_DOMAIN}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE}"
+      JWT_REALM: "${JWT_REALM}"
+      JWT_SECRET: "${JWT_SECRET}"
+      # Fallback bearer token used when a request carries no Authorization
+      # header. Minted by bin/bootstrap.sh; blank it to require per-request auth.
+      FLEXO_AUTH: "${FLEXO_AUTH}"
+    ports:
+      - "${BIND_ADDR}:${SYSMLV2_PORT:-8083}:8080"
+    restart: unless-stopped
+
+  # Optional: OpenSysML sysml-grpc, the textual-notation engine.
+  # Without it the SysML v2 API still serves JSON; notation gets 415/406.
+  opensysml:
+    image: docker.io/openmbee/opensysml:0.12.1
+    hostname: opensysml
+    networks:
+      openmbee:
+        aliases: [opensysml]
+    # sysml-grpc refuses to bind a non-loopback address without a bearer
+    # token; -allow-unauthenticated is the documented escape hatch. The port
+    # is deliberately not published: only sysmlv2-service talks to it, over
+    # the private container network.
+    command: ["-host", "0.0.0.0", "-port", "50051", "-health-port", "8081",
+              "-allow-unauthenticated"]
+    restart: unless-stopped
+
+networks:
+  openmbee:
+    name: openmbee
+    driver: bridge
+
+volumes:
+  openldap-data:
+  fuseki-data:
+  minio-data:

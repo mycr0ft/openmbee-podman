@@ -1,0 +1,5 @@
+# Real secrets; regenerate with bin/bootstrap.sh
+.env
+# Quad store scratch
+*.tdb2
+*.tdb
