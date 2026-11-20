@@ -75,7 +75,31 @@ TTL
   esac
 fi
 
-say "7/7 ready"
+say "7/7 demo project"
+demo=$(dotenv DEMO_PROJECT "")
+if [ -n "$demo" ]; then
+  echo "  project hello ($demo)"
+else
+  # sysmlv2-service creates the backing project through store-service, which can
+  # still be warming up: a 500 here is transient, so retry rather than fail.
+  for i in 1 2 3 4 5; do
+    body=$(curl -s -H "Authorization: $(dotenv FLEXO_AUTH)" -H 'Content-Type: application/json' \
+      -d '{"@type":"Project","name":"hello","description":"first-run demo"}' \
+      "$SYS/projects")
+    demo=$(printf '%s' "$body" | jget 'd.get("@id","").rsplit("/",1)[-1]')
+    [ -n "$demo" ] && break
+    echo "  project create attempt $i/5 failed, retrying in 3s"
+    sleep 3
+  done
+  if [ -n "$demo" ]; then
+    printf 'DEMO_PROJECT=%s\n' "$demo" >> .env
+    echo "  created project hello ($demo, saved as .env DEMO_PROJECT)"
+  else
+    echo "  project create failed: ${body:0:160} (see: make logs)" >&2
+  fi
+fi
+
+say "ready"
 cat <<EOF
   layer1      $L1
   auth        $AUTH/login   (curl -u $(dotenv DEMO_USER user01):$(dotenv DEMO_PASSWORD password1))

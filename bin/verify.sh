@@ -11,11 +11,6 @@ FLEXO_AUTH=$(dotenv FLEXO_AUTH)
 pass=0 fail=0
 ok()  { printf '  PASS  %-24s %s\n' "$1" "${2:-}"; pass=$((pass+1)); }
 bad() { printf '  FAIL  %-24s %s\n' "$1" "${2:-}"; fail=$((fail+1)); }
-jget() { python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: print(""); raise SystemExit
-print(eval(sys.argv[1]))' "$1" 2>/dev/null || true; }
-
 echo "auth-service ($AUTH)"
 login=$(curl -s -u "$(dotenv DEMO_USER user01):$(dotenv DEMO_PASSWORD password1)" "$AUTH/login")
 tok=$(printf '%s' "$login" | python3 -c 'import json,sys

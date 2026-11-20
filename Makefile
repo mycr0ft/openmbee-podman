@@ -2,7 +2,7 @@
 COMPOSE = podman-compose -p openmbee
 SHELL   = /bin/bash
 
-.PHONY: help up down reset status logs seed verify token login ps shell
+.PHONY: help up down reset status logs seed verify demo graph token login ps shell
 
 help:            ## this list
 	@grep -hE '^[a-z]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t18
@@ -21,6 +21,10 @@ verify:          ## end-to-end gate: auth, org/project, JSON, notation, persiste
 	./bin/verify.sh
 seed:            ## (re)load mount/cluster.trig if the cluster graph is missing
 	./bin/seed.sh
+demo:            ## parse examples/hello.sysml and render it back as text
+	./bin/demo.sh
+graph:           ## number of named graphs in the quad store
+	@./bin/graph-count.sh
 token:           ## print the long-lived bearer token
 	@python3 bin/envset.py .env FLEXO_AUTH
 login:           ## interactive: demo-user token from auth-service

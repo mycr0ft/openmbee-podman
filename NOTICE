@@ -1,0 +1,20 @@
+OpenMBEE Flexo MMS + SysML v2 API, on Podman
+Copyright 2026 Jon R. Fox
+
+This product includes software developed at the OpenMBEE project
+(https://www.openmbee.org/), specifically the deployment topology and service
+configuration published in:
+
+    Open-MBEE/flexo-mms-deployment
+    Open-MBEE/flexo-mms-sysmlv2
+
+Both are licensed under the Apache License, Version 2.0, and this project is a
+derivative work of them: it translates their docker-compose topology to
+podman-compose and changes the persistence, seed and readiness handling
+documented in README.md.
+
+Container images referenced by compose.yaml are third-party works under their
+own licenses: OpenMBEE Flexo and OpenSysML (Apache-2.0), Apache Jena Fuseki
+(Apache-2.0), Bitnami OpenLDAP and MinIO (Apache-2.0), Eclipse Temurin JDK
+(GPLv2 with Classpath Exception). This repository distributes none of them; it
+pulls them by digest at run time.
