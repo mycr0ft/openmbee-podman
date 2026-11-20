@@ -268,6 +268,8 @@ that are pulled at run time (none are redistributed here).
     bin/demo.sh             parse examples/hello.sysml into a new project,
                             render the commit back as text
     bin/graph-count.sh      named-graph count from the quad store
+    bin/identity-probe.py   what the parser does to element identifiers
+                            across projects, and on a package rename
     bin/mint-token.py       HS256 token minter (stdlib only)
     bin/wait-for.sh         poll a URL until it answers with an expected code
     bin/envset.py           read/replace one key in .env
@@ -292,5 +294,9 @@ keys through `bin/envset.py` instead.
 - Committing the *same* text twice into one project returns HTTP 500 from
   `develop-SNAPSHOT` (NPE in its LDP response parser, not a permission or
   notation problem). Use a new project per model until upstream fixes it.
+- Element identifiers are name-based (UUIDv5) and stable across projects, but a
+  commit records insertions only: rename a package and the new elements are
+  added while the old ones stay, so that commit holds both. `bin/identity-probe.py`
+  demonstrates it; do not read a commit's elements as a snapshot.
 - Restart survival was checked by hand (`podman restart` of the quad store, then
   a SPARQL count), not by `verify.sh`.
